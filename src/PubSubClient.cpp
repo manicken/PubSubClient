@@ -8,11 +8,34 @@
 #include "PubSubClient.h"
 #include "Arduino.h"
 
+// both macros are wrapped in classic do {}while(0); to make it "statement-safe"
+// not that it's used in statements right now but you never know
+#define IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR(res) \
+do { \
+    if (res != PubSubClientResult::Success) {\
+        disconnect();\
+        if (onErrorCallback) {\
+            onErrorCallback(this->callbackContexts, res, PubSubClientErrorType::FramingError);\
+        }\
+    }\
+} while(0);
+
+#define IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR_RETURN(res) \
+do { \    
+    if (res != PubSubClientResult::Success) {\
+        disconnect();\
+        if (onErrorCallback) {\
+            onErrorCallback(this->callbackContexts, res, PubSubClientErrorType::FramingError);\
+        }\
+        return false;\
+    }\
+} while(0);
+
 PubSubClient::PubSubClient() {
     this->_state = MQTT_DISCONNECTED;
     this->_client = NULL;
-    this->stream = NULL;
-    setCallback(NULL);
+    //this->stream = NULL;
+    setOnPublishHeaderCallback(NULL, NULL);
     this->bufferSize = 0;
     setBufferSize(MQTT_MAX_PACKET_SIZE);
     setKeepAlive(MQTT_KEEPALIVE);
@@ -22,7 +45,8 @@ PubSubClient::PubSubClient() {
 PubSubClient::PubSubClient(Client& client) {
     this->_state = MQTT_DISCONNECTED;
     setClient(client);
-    this->stream = NULL;
+    //this->stream = NULL;
+    setOnPublishHeaderCallback(NULL, NULL);
     this->bufferSize = 0;
     setBufferSize(MQTT_MAX_PACKET_SIZE);
     setKeepAlive(MQTT_KEEPALIVE);
@@ -33,13 +57,14 @@ PubSubClient::PubSubClient(IPAddress addr, uint16_t port, Client& client) {
     this->_state = MQTT_DISCONNECTED;
     setServer(addr, port);
     setClient(client);
-    this->stream = NULL;
+    //this->stream = NULL;
+    setOnPublishHeaderCallback(NULL, NULL);
     this->bufferSize = 0;
     setBufferSize(MQTT_MAX_PACKET_SIZE);
     setKeepAlive(MQTT_KEEPALIVE);
     setSocketTimeout(MQTT_SOCKET_TIMEOUT);
 }
-PubSubClient::PubSubClient(IPAddress addr, uint16_t port, Client& client, Stream& stream) {
+/*PubSubClient::PubSubClient(IPAddress addr, uint16_t port, Client& client, Stream& stream) {
     this->_state = MQTT_DISCONNECTED;
     setServer(addr,port);
     setClient(client);
@@ -48,19 +73,19 @@ PubSubClient::PubSubClient(IPAddress addr, uint16_t port, Client& client, Stream
     setBufferSize(MQTT_MAX_PACKET_SIZE);
     setKeepAlive(MQTT_KEEPALIVE);
     setSocketTimeout(MQTT_SOCKET_TIMEOUT);
-}
-PubSubClient::PubSubClient(IPAddress addr, uint16_t port, MQTT_CALLBACK_SIGNATURE, Client& client) {
+}*/
+PubSubClient::PubSubClient(IPAddress addr, uint16_t port, void* callbackContext, MQTT_ON_PUBLISH_HEADER_CALLBACK_SIGNATURE, Client& client) {
     this->_state = MQTT_DISCONNECTED;
     setServer(addr, port);
-    setCallback(callback);
+    setOnPublishHeaderCallback(callbackContext, onPublishHeaderCallback);
     setClient(client);
-    this->stream = NULL;
+    //this->stream = NULL;
     this->bufferSize = 0;
     setBufferSize(MQTT_MAX_PACKET_SIZE);
     setKeepAlive(MQTT_KEEPALIVE);
     setSocketTimeout(MQTT_SOCKET_TIMEOUT);
 }
-PubSubClient::PubSubClient(IPAddress addr, uint16_t port, MQTT_CALLBACK_SIGNATURE, Client& client, Stream& stream) {
+/*PubSubClient::PubSubClient(IPAddress addr, uint16_t port, MQTT_CALLBACK_SIGNATURE, Client& client, Stream& stream) {
     this->_state = MQTT_DISCONNECTED;
     setServer(addr,port);
     setCallback(callback);
@@ -70,19 +95,20 @@ PubSubClient::PubSubClient(IPAddress addr, uint16_t port, MQTT_CALLBACK_SIGNATUR
     setBufferSize(MQTT_MAX_PACKET_SIZE);
     setKeepAlive(MQTT_KEEPALIVE);
     setSocketTimeout(MQTT_SOCKET_TIMEOUT);
-}
+}*/
 
 PubSubClient::PubSubClient(uint8_t *ip, uint16_t port, Client& client) {
     this->_state = MQTT_DISCONNECTED;
     setServer(ip, port);
     setClient(client);
-    this->stream = NULL;
+    //this->stream = NULL;
+    setOnPublishHeaderCallback(NULL, NULL);
     this->bufferSize = 0;
     setBufferSize(MQTT_MAX_PACKET_SIZE);
     setKeepAlive(MQTT_KEEPALIVE);
     setSocketTimeout(MQTT_SOCKET_TIMEOUT);
 }
-PubSubClient::PubSubClient(uint8_t *ip, uint16_t port, Client& client, Stream& stream) {
+/*PubSubClient::PubSubClient(uint8_t *ip, uint16_t port, Client& client, Stream& stream) {
     this->_state = MQTT_DISCONNECTED;
     setServer(ip,port);
     setClient(client);
@@ -91,19 +117,19 @@ PubSubClient::PubSubClient(uint8_t *ip, uint16_t port, Client& client, Stream& s
     setBufferSize(MQTT_MAX_PACKET_SIZE);
     setKeepAlive(MQTT_KEEPALIVE);
     setSocketTimeout(MQTT_SOCKET_TIMEOUT);
-}
-PubSubClient::PubSubClient(uint8_t *ip, uint16_t port, MQTT_CALLBACK_SIGNATURE, Client& client) {
+}*/
+PubSubClient::PubSubClient(uint8_t *ip, uint16_t port, void* callbackContext, MQTT_ON_PUBLISH_HEADER_CALLBACK_SIGNATURE, Client& client) {
     this->_state = MQTT_DISCONNECTED;
     setServer(ip, port);
-    setCallback(callback);
+    setOnPublishHeaderCallback(callbackContext, onPublishHeaderCallback);
     setClient(client);
-    this->stream = NULL;
+    //this->stream = NULL;
     this->bufferSize = 0;
     setBufferSize(MQTT_MAX_PACKET_SIZE);
     setKeepAlive(MQTT_KEEPALIVE);
     setSocketTimeout(MQTT_SOCKET_TIMEOUT);
 }
-PubSubClient::PubSubClient(uint8_t *ip, uint16_t port, MQTT_CALLBACK_SIGNATURE, Client& client, Stream& stream) {
+/*PubSubClient::PubSubClient(uint8_t *ip, uint16_t port, MQTT_CALLBACK_SIGNATURE, Client& client, Stream& stream) {
     this->_state = MQTT_DISCONNECTED;
     setServer(ip,port);
     setCallback(callback);
@@ -113,19 +139,19 @@ PubSubClient::PubSubClient(uint8_t *ip, uint16_t port, MQTT_CALLBACK_SIGNATURE, 
     setBufferSize(MQTT_MAX_PACKET_SIZE);
     setKeepAlive(MQTT_KEEPALIVE);
     setSocketTimeout(MQTT_SOCKET_TIMEOUT);
-}
+}*/
 
 PubSubClient::PubSubClient(const char* domain, uint16_t port, Client& client) {
     this->_state = MQTT_DISCONNECTED;
     setServer(domain,port);
     setClient(client);
-    this->stream = NULL;
+    //this->stream = NULL;
     this->bufferSize = 0;
     setBufferSize(MQTT_MAX_PACKET_SIZE);
     setKeepAlive(MQTT_KEEPALIVE);
     setSocketTimeout(MQTT_SOCKET_TIMEOUT);
 }
-PubSubClient::PubSubClient(const char* domain, uint16_t port, Client& client, Stream& stream) {
+/*PubSubClient::PubSubClient(const char* domain, uint16_t port, Client& client, Stream& stream) {
     this->_state = MQTT_DISCONNECTED;
     setServer(domain,port);
     setClient(client);
@@ -134,19 +160,19 @@ PubSubClient::PubSubClient(const char* domain, uint16_t port, Client& client, St
     setBufferSize(MQTT_MAX_PACKET_SIZE);
     setKeepAlive(MQTT_KEEPALIVE);
     setSocketTimeout(MQTT_SOCKET_TIMEOUT);
-}
-PubSubClient::PubSubClient(const char* domain, uint16_t port, MQTT_CALLBACK_SIGNATURE, Client& client) {
+}*/
+PubSubClient::PubSubClient(const char* domain, uint16_t port, void* callbackContext, MQTT_ON_PUBLISH_HEADER_CALLBACK_SIGNATURE, Client& client) {
     this->_state = MQTT_DISCONNECTED;
     setServer(domain,port);
-    setCallback(callback);
+    setOnPublishHeaderCallback(callbackContext, onPublishHeaderCallback);
     setClient(client);
-    this->stream = NULL;
+    //this->stream = NULL;
     this->bufferSize = 0;
     setBufferSize(MQTT_MAX_PACKET_SIZE);
     setKeepAlive(MQTT_KEEPALIVE);
     setSocketTimeout(MQTT_SOCKET_TIMEOUT);
 }
-PubSubClient::PubSubClient(const char* domain, uint16_t port, MQTT_CALLBACK_SIGNATURE, Client& client, Stream& stream) {
+/*PubSubClient::PubSubClient(const char* domain, uint16_t port, MQTT_CALLBACK_SIGNATURE, Client& client, Stream& stream) {
     this->_state = MQTT_DISCONNECTED;
     setServer(domain,port);
     setCallback(callback);
@@ -156,7 +182,7 @@ PubSubClient::PubSubClient(const char* domain, uint16_t port, MQTT_CALLBACK_SIGN
     setBufferSize(MQTT_MAX_PACKET_SIZE);
     setKeepAlive(MQTT_KEEPALIVE);
     setSocketTimeout(MQTT_SOCKET_TIMEOUT);
-}
+}*/
 
 PubSubClient::~PubSubClient() {
   free(this->buffer);
@@ -179,109 +205,107 @@ BOOLEAN_TYPE PubSubClient::connect(const char *id, const char *user, const char 
 }
 
 BOOLEAN_TYPE PubSubClient::connect(const char *id, const char *user, const char *pass, const char* willTopic, uint8_t willQos, BOOLEAN_TYPE willRetain, const char* willMessage, BOOLEAN_TYPE cleanSession) {
-    if (!connected()) {
-        int result = 0;
+    if (connected()) { return true; }
+    int result = 0;
 
 
-        if(_client->connected()) {
-            result = 1;
+    if(_client->connected()) {
+        result = 1;
+    } else {
+        if (domain != NULL) {
+            result = _client->connect(this->domain, this->port);
         } else {
-            if (domain != NULL) {
-                result = _client->connect(this->domain, this->port);
-            } else {
-                result = _client->connect(this->ip, this->port);
-            }
+            result = _client->connect(this->ip, this->port);
         }
+    }
 
-        if (result == 1) {
-            nextMsgId = 1;
-            // Leave room in the buffer for header and variable length field
-            uint16_t length = MQTT_MAX_HEADER_SIZE;
-            unsigned int j;
+    if (result == 1) {
+        nextMsgId = 1;
+        // Leave room in the buffer for header and variable length field
+        uint16_t length = MQTT_MAX_HEADER_SIZE;
+        unsigned int j;
 
 #if MQTT_VERSION == MQTT_VERSION_3_1
-            uint8_t d[9] = {0x00,0x06,'M','Q','I','s','d','p', MQTT_VERSION};
+        uint8_t d[9] = {0x00,0x06,'M','Q','I','s','d','p', MQTT_VERSION};
 #define MQTT_HEADER_VERSION_LENGTH 9
 #elif MQTT_VERSION == MQTT_VERSION_3_1_1
-            uint8_t d[7] = {0x00,0x04,'M','Q','T','T',MQTT_VERSION};
+        uint8_t d[7] = {0x00,0x04,'M','Q','T','T',MQTT_VERSION};
 #define MQTT_HEADER_VERSION_LENGTH 7
 #endif
-            for (j = 0;j<MQTT_HEADER_VERSION_LENGTH;j++) {
-                this->buffer[length++] = d[j];
-            }
-
-            uint8_t v;
-            if (willTopic) {
-                v = 0x04|(willQos<<3)|(willRetain<<5);
-            } else {
-                v = 0x00;
-            }
-            if (cleanSession) {
-                v = v|0x02;
-            }
-
-            if(user != NULL) {
-                v = v|0x80;
-
-                if(pass != NULL) {
-                    v = v|(0x80>>1);
-                }
-            }
-            this->buffer[length++] = v;
-
-            this->buffer[length++] = ((this->keepAlive) >> 8);
-            this->buffer[length++] = ((this->keepAlive) & 0xFF);
-
-            CHECK_STRING_LENGTH(length,id)
-            length = writeString(id,this->buffer,length);
-            if (willTopic) {
-                CHECK_STRING_LENGTH(length,willTopic)
-                length = writeString(willTopic,this->buffer,length);
-                CHECK_STRING_LENGTH(length,willMessage)
-                length = writeString(willMessage,this->buffer,length);
-            }
-
-            if(user != NULL) {
-                CHECK_STRING_LENGTH(length,user)
-                length = writeString(user,this->buffer,length);
-                if(pass != NULL) {
-                    CHECK_STRING_LENGTH(length,pass)
-                    length = writeString(pass,this->buffer,length);
-                }
-            }
-
-            write(MQTTCONNECT,this->buffer,length-MQTT_MAX_HEADER_SIZE);
-
-            lastInActivity = lastOutActivity = millis();
-
-            while (!_client->available()) {
-                unsigned long t = millis();
-                if (t-lastInActivity >= ((int32_t) this->socketTimeout*1000UL)) {
-                    _state = MQTT_CONNECTION_TIMEOUT;
-                    _client->stop();
-                    return false;
-                }
-            }
-            uint8_t llen;
-            uint32_t len = readPacket(&llen);
-
-            if (len == 4) {
-                if (buffer[3] == 0) {
-                    lastInActivity = millis();
-                    pingOutstanding = false;
-                    _state = MQTT_CONNECTED;
-                    return true;
-                } else {
-                    _state = buffer[3];
-                }
-            }
-            _client->stop();
-        } else {
-            _state = MQTT_CONNECT_FAILED;
+        for (j = 0;j<MQTT_HEADER_VERSION_LENGTH;j++) {
+            this->buffer[length++] = d[j];
         }
-        return false;
+
+        uint8_t v;
+        if (willTopic) {
+            v = 0x04|(willQos<<3)|(willRetain<<5);
+        } else {
+            v = 0x00;
+        }
+        if (cleanSession) {
+            v = v|0x02;
+        }
+
+        if(user != NULL) {
+            v = v|0x80;
+
+            if(pass != NULL) {
+                v = v|(0x80>>1);
+            }
+        }
+        this->buffer[length++] = v;
+
+        this->buffer[length++] = ((this->keepAlive) >> 8);
+        this->buffer[length++] = ((this->keepAlive) & 0xFF);
+
+        CHECK_STRING_LENGTH(length,id)
+        length = writeString(id,this->buffer,length);
+        if (willTopic) {
+            CHECK_STRING_LENGTH(length,willTopic)
+            length = writeString(willTopic,this->buffer,length);
+            CHECK_STRING_LENGTH(length,willMessage)
+            length = writeString(willMessage,this->buffer,length);
+        }
+
+        if(user != NULL) {
+            CHECK_STRING_LENGTH(length,user)
+            length = writeString(user,this->buffer,length);
+            if(pass != NULL) {
+                CHECK_STRING_LENGTH(length,pass)
+                length = writeString(pass,this->buffer,length);
+            }
+        }
+
+        write(MQTTCONNECT,this->buffer,length-MQTT_MAX_HEADER_SIZE);
+
+        lastInActivity = lastOutActivity = millis();
+
+        while (!_client->available()) {
+            unsigned long t = millis();
+            if (t-lastInActivity >= ((int32_t) this->socketTimeout*1000UL)) {
+                _state = MQTT_CONNECTION_TIMEOUT;
+                _client->stop();
+                return false;
+            }
+        }
+        uint8_t llen;
+        uint32_t len = readPacket(&llen);
+
+        if (len == 4) {
+            if (buffer[3] == 0) {
+                lastInActivity = millis();
+                pingOutstanding = false;
+                _state = MQTT_CONNECTED;
+                return true;
+            } else {
+                _state = buffer[3];
+            }
+        }
+        _client->stop();
+    } else {
+        _state = MQTT_CONNECT_FAILED;
     }
-    return true;
+    return false;
 }
 
 // reads a byte into result
@@ -319,6 +343,7 @@ uint32_t PubSubClient::readPacket(uint8_t* lengthLength) {
     uint16_t skip = 0;
     uint32_t start = 0;
 
+    // get variable length
     do {
         if (len == 5) {
             // Invalid remaining length encoding - kill the connection
@@ -348,11 +373,6 @@ uint32_t PubSubClient::readPacket(uint8_t* lengthLength) {
 
     for (uint32_t i = start;i<length;i++) {
         if(!readByte(&digit)) return 0;
-        if (this->stream) {
-            if (isPublish && idx-*lengthLength-2>skip) {
-                this->stream->write(digit);
-            }
-        }
 
         if (len < this->bufferSize) {
             this->buffer[len] = digit;
@@ -361,76 +381,201 @@ uint32_t PubSubClient::readPacket(uint8_t* lengthLength) {
         idx++;
     }
 
-    if (!this->stream && idx > this->bufferSize) {
+    if (idx > this->bufferSize) {
         len = 0; // This will cause the packet to be ignored.
     }
     return len;
 }
 
-BOOLEAN_TYPE PubSubClient::loop() {
-    if (connected()) {
-        unsigned long t = millis();
-        if ((t - lastInActivity > this->keepAlive*1000UL) || (t - lastOutActivity > this->keepAlive*1000UL)) {
-            if (pingOutstanding) {
-                this->_state = MQTT_CONNECTION_TIMEOUT;
-                _client->stop();
-                return false;
-            } else {
-                this->buffer[0] = MQTTPINGREQ;
-                this->buffer[1] = 0;
-                _client->write(this->buffer,2);
-                lastOutActivity = t;
-                lastInActivity = t;
-                pingOutstanding = true;
-            }
-        }
-        if (_client->available()) {
-            uint8_t llen;
-            uint16_t len = readPacket(&llen);
-            uint16_t msgId = 0;
-            uint8_t *payload;
-            if (len > 0) {
-                lastInActivity = t;
-                uint8_t type = this->buffer[0]&0xF0;
-                if (type == MQTTPUBLISH) {
-                    if (callback) {
-                        uint16_t tl = (this->buffer[llen+1]<<8)+this->buffer[llen+2]; /* topic length in bytes */
-                        memmove(this->buffer+llen+2,this->buffer+llen+3,tl); /* move topic inside buffer 1 byte to front */
-                        this->buffer[llen+2+tl] = 0; /* end the topic as a 'C' string with \x00 */
-                        char *topic = (char*) this->buffer+llen+2;
-                        // msgId only present for QOS>0
-                        if ((this->buffer[0]&0x06) == MQTTQOS1) {
-                            msgId = (this->buffer[llen+3+tl]<<8)+this->buffer[llen+3+tl+1];
-                            payload = this->buffer+llen+3+tl+2;
-                            callback(topic,payload,len-llen-3-tl-2);
-
-                            this->buffer[0] = MQTTPUBACK;
-                            this->buffer[1] = 2;
-                            this->buffer[2] = (msgId >> 8);
-                            this->buffer[3] = (msgId & 0xFF);
-                            _client->write(this->buffer,4);
-                            lastOutActivity = t;
-
-                        } else {
-                            payload = this->buffer+llen+3+tl;
-                            callback(topic,payload,len-llen-3-tl);
-                        }
-                    }
-                } else if (type == MQTTPINGREQ) {
-                    this->buffer[0] = MQTTPINGRESP;
-                    this->buffer[1] = 0;
-                    _client->write(this->buffer,2);
-                } else if (type == MQTTPINGRESP) {
-                    pingOutstanding = false;
-                }
-            } else if (!connected()) {
-                // readPacket has closed the connection
-                return false;
-            }
-        }
-        return true;
+PubSubClientResult PubSubClient::readHeader() {
+    uint8_t control_byte = 0;
+    if(!readByte(&control_byte)) {
+        return PubSubClientResult::HeaderReadError_FirstByte;
     }
-    return false;
+    this->rx_control_byte = control_byte;
+    uint8_t type = control_byte >> 4;
+    if (type == 0 || type == 15) {
+        return PubSubClientResult::HeaderReadError_FirstByteTypeInvalid;
+    }
+    if ((control_byte & MQTT_QOS_MASK) == MQTTQOS_ERROR) {
+        return PubSubClientResult::HeaderReadError_FirstByteQoSInvalid;
+    }
+    
+    uint32_t multiplier = 1;
+    uint32_t length = 0;
+    uint8_t digit = 0;
+    uint8_t vlengthByteCount = 0;
+
+    // get variable length
+    do {
+        if (vlengthByteCount == 4) {
+            return PubSubClientResult::HeaderReadError_VariableLengthCorruption;
+        }
+        if(!readByte(&digit)) return PubSubClientResult::HeaderReadError_VariableLength;
+        length += (digit & 127) * multiplier;
+        multiplier <<=7; //multiplier *= 128
+        vlengthByteCount++;
+    } while (digit & 128);
+    rx_length = length;
+    return PubSubClientResult::Success;
+}
+
+PubSubClientResult PubSubClient::readPublishHeader(uint16_t& topicLength) {
+    uint8_t msb, lsb;
+    if(!readByte(&msb)) { return PubSubClientResult::PublishHeaderReadError_TopicLengthMSB; }
+    if(!readByte(&lsb)) { return PubSubClientResult::PublishHeaderReadError_TopicLengthLSB; }
+    topicLength = (msb << 8) | lsb;
+    return PubSubClientResult::Success;
+}
+
+PubSubClientResult PubSubClient::readBytes(uint8_t* dest, uint32_t count) {
+    uint8_t digit = 0;
+    for (uint32_t i=0;i<count;i++,dest++) {
+        if(!readByte(&digit)) return PubSubClientResult::PayloadReadError;
+        *dest = digit;
+    }
+    return PubSubClientResult::Success;
+}
+
+PubSubClientResult PubSubClient::flushBytes(uint32_t count) {
+    uint8_t digit = 0;
+    for (uint32_t i=0;i<count;i++) {
+        if(!readByte(&digit)) return PubSubClientResult::PayloadReadError;
+    }
+    return PubSubClientResult::Success;
+}
+
+BOOLEAN_TYPE PubSubClient::loop() {
+    if (connected() == false) { return false; }
+
+    unsigned long t = millis();
+    if ((t - lastInActivity > this->keepAlive*1000UL) || (t - lastOutActivity > this->keepAlive*1000UL)) {
+        if (pingOutstanding) {
+            this->_state = MQTT_CONNECTION_TIMEOUT;
+            _client->stop();
+            return false;
+        } else {
+            this->buffer[0] = MQTTPINGREQ;
+            this->buffer[1] = 0;
+            _client->write(this->buffer,2);
+            lastOutActivity = t;
+            lastInActivity = t;
+            pingOutstanding = true;
+        }
+    }
+    if (_client->available() == 0) { return true; }
+
+    PubSubClientResult res = readHeader();
+    IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR_RETURN(res);
+
+    lastInActivity = t;
+    uint8_t type = rx_type();
+    if (type == MQTTPUBLISH) {
+        uint8_t id_msb, id_lsb;
+
+        if (onPublishHeaderCallback == NULL) {
+            res = flushBytes(rx_length);
+            IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR_RETURN(res);
+            return true;
+        }
+        uint16_t topicLengthOut = 0;
+        res = readPublishHeader(topicLengthOut);
+        IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR_RETURN(res);
+
+        if (topicLengthOut > this->bufferSize) {
+            res = flushBytes(topicLengthOut);
+            IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR(res);
+
+            if (onErrorCallback) {
+                onErrorCallback(this->callbackContexts, PubSubClientResult::PreBufferOverflowError_Topic, PubSubClientErrorType::LogicError); // also send this
+            }
+            return false;
+        }
+        res = readBytes(this->buffer, topicLengthOut);
+        IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR_RETURN(res);
+
+        if ((uint32_t)(topicLengthOut + 2) > rx_length) {
+            disconnect();
+            if (onErrorCallback) {
+                onErrorCallback(this->callbackContexts, PubSubClientResult::ProtocolError_LengthMismatch, PubSubClientErrorType::FramingError);
+            }
+            return false;
+        }
+        uint32_t payloadLength = (rx_length - 2 - topicLengthOut); // -2 because of topic length bytes
+        if (rx_flags_qos() > 0) {
+            
+            if (!readByte(&id_msb) || !readByte(&id_lsb)) {
+                disconnect();
+                if (onErrorCallback) onErrorCallback(this->callbackContexts, PubSubClientResult::PublishHeaderReadError_PacketId, PubSubClientErrorType::FramingError);
+                return false;
+            }
+            payloadLength -= 2;
+        }
+
+        PSC_PublishFlags flags(rx_flags());
+        // here the topic is first in the buffer
+        this->buffer[topicLengthOut] = '\0'; // null terminate the topic
+        PubSubClientPacketReceiver context = onPublishHeaderCallback(this->callbackContexts, (char*)this->buffer, topicLengthOut, payloadLength, flags);
+        
+        if (context.sink != PubSubClientPayloadSink::Discard) {
+            uint32_t currentBuffCapacity = 0;
+            uint8_t* currBuff = NULL;
+            if (context.buffer != NULL && context.capacity != 0) {
+                currentBuffCapacity = context.capacity;
+                currBuff = context.buffer;
+            } else {
+                currentBuffCapacity = this->bufferSize - topicLengthOut - 1; // represent remaining space in buffert -1 is because we added null char to topic
+                currBuff = this->buffer + topicLengthOut + 1; // represent from where in buffet to write next +1 is because we added null char to topic
+            }
+
+            if (payloadLength > currentBuffCapacity) {
+                res = flushBytes(payloadLength);
+                IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR(res);
+
+                if (onErrorCallback) {
+                    onErrorCallback(this->callbackContexts, PubSubClientResult::PreBufferOverflowError_Payload, PubSubClientErrorType::LogicError); 
+                }
+                return false;
+            }
+            res = readBytes(currBuff, payloadLength);
+            IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR_RETURN(res);
+
+            if (rx_flags_qos() == 1) {
+                this->buffer[0] = MQTTPUBACK;
+                this->buffer[1] = 2;
+                this->buffer[2] = id_msb;
+                this->buffer[3] = id_lsb;
+                _client->write(this->buffer, 4);
+                lastOutActivity = t;
+            }
+            if (context.onPublishCompleteCallback) {
+                context.onPublishCompleteCallback(this->callbackContexts, (char*)this->buffer, topicLengthOut, currBuff, payloadLength);
+            }
+            return true;
+        } else {
+            res = flushBytes(payloadLength);
+            IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR_RETURN(res);
+
+            if (rx_flags_qos() == 1) {
+                this->buffer[0] = MQTTPUBACK;
+                this->buffer[1] = 2;
+                this->buffer[2] = id_msb;
+                this->buffer[3] = id_lsb;
+                _client->write(this->buffer, 4);
+            }
+            if (context.onPublishCompleteCallback) {
+                context.onPublishCompleteCallback(this->callbackContexts, (char*)this->buffer, topicLengthOut, NULL, 0);
+            }
+            return true;
+        }
+    } else if (type == MQTTPINGREQ) {
+        this->buffer[0] = MQTTPINGRESP;
+        this->buffer[1] = 0;
+        _client->write(this->buffer,2);
+    } else if (type == MQTTPINGRESP) {
+        pingOutstanding = false;
+    }
+    return true;
 }
 
 BOOLEAN_TYPE PubSubClient::publish(const char* topic, const char* payload) {
@@ -520,7 +665,7 @@ BOOLEAN_TYPE PubSubClient::publish_P(const char* topic, const uint8_t* payload, 
 
     expectedLength = 1 + llen + 2 + tlen + plength;
 
-    return (rc == expectedLength);
+    return (rc == (unsigned int)expectedLength);
 }
 
 BOOLEAN_TYPE PubSubClient::beginPublish(const char* topic, unsigned int plength, BOOLEAN_TYPE retained) {
@@ -538,6 +683,22 @@ BOOLEAN_TYPE PubSubClient::beginPublish(const char* topic, unsigned int plength,
         return (rc == (length-(MQTT_MAX_HEADER_SIZE-hlen)));
     }
     return false;
+}
+
+BOOLEAN_TYPE PubSubClient::beginPublishF(const char* topic, unsigned int plength, BOOLEAN_TYPE retained) {
+    if (connected() == false) { return false; }
+
+    // Send the header and variable length field
+    uint16_t length = MQTT_MAX_HEADER_SIZE;
+    length = writeString(topic,this->buffer,length);
+    uint8_t header = MQTTPUBLISH;
+    if (retained) {
+        header |= 1;
+    }
+    size_t hlen = buildHeader(header, this->buffer, plength+length-MQTT_MAX_HEADER_SIZE);
+    uint16_t rc = _client->write(this->buffer+(MQTT_MAX_HEADER_SIZE-hlen),length-(MQTT_MAX_HEADER_SIZE-hlen));
+    lastOutActivity = millis();
+    return (rc == (length-(MQTT_MAX_HEADER_SIZE-hlen)));
 }
 
 int PubSubClient::endPublish() {
@@ -680,6 +841,19 @@ uint16_t PubSubClient::writeString(const char* string, uint8_t* buf, uint16_t po
     return pos;
 }
 
+/*uint16_t PubSubClient::writeString(const char* string, uint8_t* buf, uint16_t offset) {
+    const char* idp = string;
+    uint16_t size = 0;
+    uint16_t pos = offset;
+    pos += 2;
+    while (*idp) {
+        buf[pos++] = *idp++;
+        size++;
+    }
+    buf[offset] = (size >> 8);
+    buf[offset+1] = (size & 0xFF);
+    return pos;
+}*/
 
 BOOLEAN_TYPE PubSubClient::connected() {
     BOOLEAN_TYPE rc;
@@ -718,8 +892,14 @@ PubSubClient& PubSubClient::setServer(const char * domain, uint16_t port) {
     return *this;
 }
 
-PubSubClient& PubSubClient::setCallback(MQTT_CALLBACK_SIGNATURE) {
-    this->callback = callback;
+PubSubClient& PubSubClient::setOnPublishHeaderCallback(void* context, MQTT_ON_PUBLISH_HEADER_CALLBACK_SIGNATURE) {
+    this->callbackContexts = context;
+    this->onPublishHeaderCallback = onPublishHeaderCallback;
+    return *this;
+}
+PubSubClient& PubSubClient::setOnErrorCallback(void* context, MQTT_ON_ERROR_CALLBACK_SIGNATURE) {
+    this->callbackContexts = context;
+    this->onErrorCallback = onErrorCallback;
     return *this;
 }
 
@@ -728,10 +908,10 @@ PubSubClient& PubSubClient::setClient(Client& client){
     return *this;
 }
 
-PubSubClient& PubSubClient::setStream(Stream& stream){
+/*PubSubClient& PubSubClient::setStream(Stream& stream){
     this->stream = &stream;
     return *this;
-}
+}*/
 
 int PubSubClient::state() {
     return this->_state;

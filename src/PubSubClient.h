@@ -69,9 +69,13 @@
 #define MQTTDISCONNECT  14 << 4 // Client is Disconnecting
 #define MQTTReserved    15 << 4 // Reserved
 
+#define RETAIN_FLAG     (1 << 0)
+#define MQTT_QOS_MASK   (3 << 1)
 #define MQTTQOS0        (0 << 1)
 #define MQTTQOS1        (1 << 1)
 #define MQTTQOS2        (2 << 1)
+#define MQTTQOS_ERROR   (3 << 1)
+#define DUP_FLAG        (1 << 3)
 
 // Maximum size of fixed header and variable length size header
 #define MQTT_MAX_HEADER_SIZE 5
@@ -81,16 +85,68 @@
 #define BOOLEAN_TYPE bool
 #endif
 
-#if defined(ESP8266) || defined(ESP32) || defined(_WIN32) || defined(__linux__) || defined(__APPLE__)
-#include <functional>
-#define MQTT_CALLBACK_SIGNATURE std::function<void(char*, uint8_t*, unsigned int)> callback
-#else
-#define MQTT_CALLBACK_SIGNATURE void (*callback)(char*, uint8_t*, unsigned int)
-#endif
+enum class PubSubClientResult {
+    Success,
+    // header read errors
+    HeaderReadError_FirstByte,
+    HeaderReadError_FirstByteTypeInvalid,
+    HeaderReadError_FirstByteQoSInvalid,
+    HeaderReadError_VariableLength,
+    HeaderReadError_VariableLengthCorruption,
+    PublishHeaderReadError_TopicLengthMSB,
+    PublishHeaderReadError_TopicLengthLSB,
+    PublishHeaderReadError_PacketId,
+    ProtocolError_LengthMismatch,
+    PayloadReadError,
+    PreBufferOverflowError,
+    PreBufferOverflowError_Topic,
+    PreBufferOverflowError_Payload
+};
+
+enum class PubSubClientErrorType {
+    FramingError,
+    LogicError
+};
+
+struct PSC_PublishFlags {
+private:
+    uint8_t  flags;      // retain/qos/dup
+public:
+	inline bool RETAIN() const {return (flags & 0x01); }
+	inline bool DUP() const { return (flags & 0x08); }
+	inline uint8_t QoS() const { return (flags >> 1) & 0x03; }
+	
+	PSC_PublishFlags(uint8_t  flags) : flags(flags) {}
+};
+
+#define MQTT_ON_PUBLISH_COMPLETE_CALLBACK_SIGNATURE void (*onPublishCompleteCallback)(void* ctx, char* topic, uint16_t topicLength, uint8_t* payloadData, uint32_t payload_len)
+
+enum class PubSubClientPayloadSink {
+    Buffer,
+    Discard
+};
+
+struct PubSubClientPacketReceiver {
+    uint8_t* buffer;
+    size_t capacity;
+    PubSubClientPayloadSink sink;
+
+    MQTT_ON_PUBLISH_COMPLETE_CALLBACK_SIGNATURE;
+    PubSubClientPacketReceiver() = delete;
+    PubSubClientPacketReceiver(uint8_t* buffer, size_t capacity, MQTT_ON_PUBLISH_COMPLETE_CALLBACK_SIGNATURE) : 
+        buffer(buffer), capacity(capacity), sink(PubSubClientPayloadSink::Buffer), onPublishCompleteCallback(onPublishCompleteCallback) {}
+    PubSubClientPacketReceiver(PubSubClientPayloadSink sink, MQTT_ON_PUBLISH_COMPLETE_CALLBACK_SIGNATURE) : 
+        buffer(NULL), capacity(0), sink(sink), onPublishCompleteCallback(onPublishCompleteCallback) {}
+};
+
+#define MQTT_ON_PUBLISH_HEADER_CALLBACK_SIGNATURE PubSubClientPacketReceiver (*onPublishHeaderCallback)(void* ctx, char* topic, uint16_t topicLength, uint32_t payloadLength, PSC_PublishFlags flags)
+#define MQTT_ON_ERROR_CALLBACK_SIGNATURE void (*onErrorCallback)(void* ctx, PubSubClientResult error, PubSubClientErrorType type)
 
 #define CHECK_STRING_LENGTH(l,s) if (l+2+strnlen(s, this->bufferSize) > this->bufferSize) {_client->stop();return false;}
 
 class PubSubClient : public Print {
+public:
+   
 private:
    Client* _client;
    uint8_t* buffer;
@@ -101,7 +157,12 @@ private:
    unsigned long lastOutActivity;
    unsigned long lastInActivity;
    bool pingOutstanding;
-   MQTT_CALLBACK_SIGNATURE;
+
+   void* callbackContexts;
+   MQTT_ON_PUBLISH_HEADER_CALLBACK_SIGNATURE;
+   //MQTT_ON_PUBLISH_COMPLETE_CALLBACK_SIGNATURE;
+   MQTT_ON_ERROR_CALLBACK_SIGNATURE;
+
    uint32_t readPacket(uint8_t*);
    BOOLEAN_TYPE readByte(uint8_t * result);
    BOOLEAN_TYPE readByte(uint8_t * result, uint16_t * index);
@@ -115,32 +176,47 @@ private:
    IPAddress ip;
    const char* domain;
    uint16_t port;
-   Stream* stream;
+   //Stream* stream;
    int _state;
+
+   uint8_t rx_control_byte;
+   inline uint8_t rx_type()   { return rx_control_byte & 0xF0; }
+   inline uint8_t rx_flags()  { return rx_control_byte & 0x0F; }
+   inline uint8_t rx_flags_qos() { return (rx_flags() >> 1) & 0x03; }
+   uint32_t rx_length;
+
+   PubSubClientResult readHeader();
+   PubSubClientResult readPublishHeader(uint16_t& length);
+   PubSubClientResult readBytes(uint8_t* dest, uint32_t count);
+   PubSubClientResult flushBytes(uint32_t count);
+
 public:
+   
    PubSubClient();
    PubSubClient(Client& client);
    PubSubClient(IPAddress, uint16_t, Client& client);
-   PubSubClient(IPAddress, uint16_t, Client& client, Stream&);
-   PubSubClient(IPAddress, uint16_t, MQTT_CALLBACK_SIGNATURE,Client& client);
-   PubSubClient(IPAddress, uint16_t, MQTT_CALLBACK_SIGNATURE,Client& client, Stream&);
+   //PubSubClient(IPAddress, uint16_t, Client& client, Stream&);
+   PubSubClient(IPAddress, uint16_t, void* callbackContext, MQTT_ON_PUBLISH_HEADER_CALLBACK_SIGNATURE,Client& client);
+   //PubSubClient(IPAddress, uint16_t, MQTT_CALLBACK_SIGNATURE,Client& client, Stream&);
    PubSubClient(uint8_t *, uint16_t, Client& client);
-   PubSubClient(uint8_t *, uint16_t, Client& client, Stream&);
-   PubSubClient(uint8_t *, uint16_t, MQTT_CALLBACK_SIGNATURE,Client& client);
-   PubSubClient(uint8_t *, uint16_t, MQTT_CALLBACK_SIGNATURE,Client& client, Stream&);
+   //PubSubClient(uint8_t *, uint16_t, Client& client, Stream&);
+   PubSubClient(uint8_t *, uint16_t, void* callbackContext, MQTT_ON_PUBLISH_HEADER_CALLBACK_SIGNATURE,Client& client);
+   //PubSubClient(uint8_t *, uint16_t, MQTT_CALLBACK_SIGNATURE,Client& client, Stream&);
    PubSubClient(const char*, uint16_t, Client& client);
-   PubSubClient(const char*, uint16_t, Client& client, Stream&);
-   PubSubClient(const char*, uint16_t, MQTT_CALLBACK_SIGNATURE,Client& client);
-   PubSubClient(const char*, uint16_t, MQTT_CALLBACK_SIGNATURE,Client& client, Stream&);
+   //PubSubClient(const char*, uint16_t, Client& client, Stream&);
+   PubSubClient(const char*, uint16_t, void* callbackContext, MQTT_ON_PUBLISH_HEADER_CALLBACK_SIGNATURE,Client& client);
+   //PubSubClient(const char*, uint16_t, MQTT_CALLBACK_SIGNATURE,Client& client, Stream&);
 
    ~PubSubClient();
 
    PubSubClient& setServer(IPAddress ip, uint16_t port);
    PubSubClient& setServer(uint8_t * ip, uint16_t port);
    PubSubClient& setServer(const char * domain, uint16_t port);
-   PubSubClient& setCallback(MQTT_CALLBACK_SIGNATURE);
+   PubSubClient& setOnPublishHeaderCallback(void* context, MQTT_ON_PUBLISH_HEADER_CALLBACK_SIGNATURE);
+   PubSubClient& setOnErrorCallback(void* context, MQTT_ON_ERROR_CALLBACK_SIGNATURE);
+
    PubSubClient& setClient(Client& client);
-   PubSubClient& setStream(Stream& stream);
+   //PubSubClient& setStream(Stream& stream);
    PubSubClient& setKeepAlive(uint16_t keepAlive);
    PubSubClient& setSocketTimeout(uint16_t timeout);
 
@@ -168,6 +244,7 @@ public:
    // a new buffer and held in memory at one time
    // Returns 1 if the message was started successfully, 0 if there was an error
    BOOLEAN_TYPE beginPublish(const char* topic, unsigned int plength, BOOLEAN_TYPE retained);
+   BOOLEAN_TYPE beginPublishF(const char* topic, unsigned int plength, BOOLEAN_TYPE retained);
    // Finish off this publish message (started with beginPublish)
    // Returns 1 if the packet was sent successfully, 0 if there was an error
    int endPublish();

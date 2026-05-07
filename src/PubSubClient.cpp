@@ -669,26 +669,9 @@ BOOLEAN_TYPE PubSubClient::publish_P(const char* topic, const uint8_t* payload, 
 }
 
 BOOLEAN_TYPE PubSubClient::beginPublish(const char* topic, unsigned int plength, BOOLEAN_TYPE retained) {
-    if (connected()) {
-        // Send the header and variable length field
-        uint16_t length = MQTT_MAX_HEADER_SIZE;
-        length = writeString(topic,this->buffer,length);
-        uint8_t header = MQTTPUBLISH;
-        if (retained) {
-            header |= 1;
-        }
-        size_t hlen = buildHeader(header, this->buffer, plength+length-MQTT_MAX_HEADER_SIZE);
-        uint16_t rc = _client->write(this->buffer+(MQTT_MAX_HEADER_SIZE-hlen),length-(MQTT_MAX_HEADER_SIZE-hlen));
-        lastOutActivity = millis();
-        return (rc == (length-(MQTT_MAX_HEADER_SIZE-hlen)));
-    }
-    return false;
-}
-
-BOOLEAN_TYPE PubSubClient::beginPublishF(const char* topic, unsigned int plength, BOOLEAN_TYPE retained) {
     if (connected() == false) { return false; }
 
-    // Send the header and variable length field
+    // write the header and variable length field bytes
     uint16_t length = MQTT_MAX_HEADER_SIZE;
     length = writeString(topic,this->buffer,length);
     uint8_t header = MQTTPUBLISH;
@@ -699,6 +682,42 @@ BOOLEAN_TYPE PubSubClient::beginPublishF(const char* topic, unsigned int plength
     uint16_t rc = _client->write(this->buffer+(MQTT_MAX_HEADER_SIZE-hlen),length-(MQTT_MAX_HEADER_SIZE-hlen));
     lastOutActivity = millis();
     return (rc == (length-(MQTT_MAX_HEADER_SIZE-hlen)));
+}
+
+BOOLEAN_TYPE PubSubClient::beginPublish_fmt(unsigned int plength, BOOLEAN_TYPE retained, const char* fmt, ...) {
+    if (connected() == false) { return false; }
+
+    // Send the header and variable length field
+    uint16_t bufferPos = MQTT_MAX_HEADER_SIZE;
+    va_list args;
+    va_start(args, fmt);
+    int topicLength = vsnprintf((char*)(this->buffer + bufferPos + 2), this->bufferSize - bufferPos - 2, fmt, args);
+    va_end(args);
+    if (topicLength <= 0 ||
+        topicLength >= (this->bufferSize - bufferPos - 2)) {
+        return false;
+    }
+    
+    this->buffer[bufferPos++] = ((uint16_t)topicLength >> 8);
+    this->buffer[bufferPos++] = ((uint16_t)topicLength & 0xFF);
+    bufferPos += topicLength;
+
+    uint8_t header = MQTTPUBLISH;
+    if (retained) {
+        header |= 1;
+    }
+    size_t hlen = buildHeader(header, this->buffer, plength+bufferPos-MQTT_MAX_HEADER_SIZE);
+    uint16_t rc = _client->write(this->buffer+(MQTT_MAX_HEADER_SIZE-hlen),bufferPos-(MQTT_MAX_HEADER_SIZE-hlen));
+    lastOutActivity = millis();
+    return (rc == (bufferPos-(MQTT_MAX_HEADER_SIZE-hlen)));
+}
+
+const char* PubSubClient::lastTxTopic() {
+    return (char*)(this->buffer + MQTT_MAX_HEADER_SIZE + 2);
+}
+uint16_t PubSubClient::lastTxTopicLength() {
+    return ((uint16_t)this->buffer[MQTT_MAX_HEADER_SIZE] << 8) |
+    ((uint16_t)this->buffer[MQTT_MAX_HEADER_SIZE + 1]);
 }
 
 int PubSubClient::endPublish() {
@@ -714,7 +733,7 @@ size_t PubSubClient::write(const uint8_t *buffer, size_t size) {
     lastOutActivity = millis();
     return _client->write(buffer,size);
 }
-
+/*
 size_t PubSubClient::buildHeader(uint8_t header, uint8_t* buf, uint16_t length) {
     uint8_t lenBuf[4];
     uint8_t llen = 0;
@@ -736,6 +755,30 @@ size_t PubSubClient::buildHeader(uint8_t header, uint8_t* buf, uint16_t length) 
     for (int i=0;i<llen;i++) {
         buf[MQTT_MAX_HEADER_SIZE-llen+i] = lenBuf[i];
     }
+    return llen+1; // Full header size is variable length bit plus the 1-byte fixed header
+}*/
+
+size_t PubSubClient::buildHeader(uint8_t header, uint8_t* buf, uint16_t length) {
+    //uint8_t lenBuf[4];
+    uint8_t llen = 0;
+    uint8_t digit;
+    uint8_t pos = 0;
+    uint16_t len = length;
+    do {
+
+        digit = len  & 127; //digit = len %128
+        len >>= 7; //len = len / 128
+        if (len > 0) {
+            digit |= 0x80;
+        }
+        buf[MQTT_MAX_HEADER_SIZE - 1 - llen] = digit;
+        llen++;
+    } while(len>0);
+
+    buf[0] = header;
+
+    buf[4-llen] = header;
+    
     return llen+1; // Full header size is variable length bit plus the 1-byte fixed header
 }
 

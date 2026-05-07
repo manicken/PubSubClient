@@ -244,7 +244,8 @@ public:
    // a new buffer and held in memory at one time
    // Returns 1 if the message was started successfully, 0 if there was an error
    BOOLEAN_TYPE beginPublish(const char* topic, unsigned int plength, BOOLEAN_TYPE retained);
-   BOOLEAN_TYPE beginPublishF(const char* topic, unsigned int plength, BOOLEAN_TYPE retained);
+
+   BOOLEAN_TYPE beginPublish_fmt(unsigned int plength, BOOLEAN_TYPE retained, const char* fmt, ...);
    // Finish off this publish message (started with beginPublish)
    // Returns 1 if the packet was sent successfully, 0 if there was an error
    int endPublish();
@@ -260,6 +261,9 @@ public:
    BOOLEAN_TYPE loop();
    BOOLEAN_TYPE connected();
    int state();
+
+   const char* lastTxTopic();
+   uint16_t lastTxTopicLength();
 
 };
 

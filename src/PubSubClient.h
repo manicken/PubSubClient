@@ -255,6 +255,7 @@ public:
    virtual size_t write(const uint8_t *buffer, size_t size);
    BOOLEAN_TYPE subscribe(const char* topic);
    BOOLEAN_TYPE subscribe(const char* topic, uint8_t qos);
+   BOOLEAN_TYPE subscribe_fmt(const char* fmt, uint8_t qos, ...);
    BOOLEAN_TYPE unsubscribe(const char* topic);
    BOOLEAN_TYPE loop();
    BOOLEAN_TYPE connected();

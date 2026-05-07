@@ -769,7 +769,7 @@ BOOLEAN_TYPE PubSubClient::subscribe(const char* topic) {
 
 BOOLEAN_TYPE PubSubClient::subscribe(const char* topic, uint8_t qos) {
     size_t topicLength = strnlen(topic, this->bufferSize);
-    if (topic == 0) {
+    if (topic == NULL) {
         return false;
     }
     if (qos > 1) {
@@ -793,6 +793,51 @@ BOOLEAN_TYPE PubSubClient::subscribe(const char* topic, uint8_t qos) {
         return write(MQTTSUBSCRIBE|MQTTQOS1,this->buffer,length-MQTT_MAX_HEADER_SIZE);
     }
     return false;
+}
+
+BOOLEAN_TYPE PubSubClient::subscribe_fmt(const char* fmt, uint8_t qos, ...) {
+    if (connected() == false) { return false; }
+    //size_t topicLength = strnlen(topic, this->bufferSize);
+    if (fmt == NULL) {
+        return false;
+    }
+    if (qos > 1) { // according to MQTT 3.1.1 spec, qos = 2 is invalid for SUBSCRIBE packets, and qos>2 is generally invalid
+        return false;
+    }
+    va_list args, args_copy;
+    va_start(args, fmt);
+    va_copy(args_copy, args);
+
+    int topicLength = vsnprintf(nullptr, 0, fmt, args_copy);
+    va_end(args_copy);
+
+    if (topicLength <= 0 || (topicLength+MQTT_MAX_HEADER_SIZE+5) >= bufferSize) { // 9 is from fixed header (1) + (max)vlength byte count (4) + topic length bytes (2) + message id bytes (2) 
+        va_end(args);
+        return false;
+    }
+
+    uint16_t bufferPos = MQTT_MAX_HEADER_SIZE;
+
+    // MQTT packetId must be non-zero; wrap 0 → 1
+    if (++nextMsgId == 0) {
+        nextMsgId = 1;
+    }
+    this->buffer[bufferPos++] = (nextMsgId >> 8);
+    this->buffer[bufferPos++] = (nextMsgId & 0xFF);
+    this->buffer[bufferPos++] = ((uint16_t)topicLength >> 8);
+    this->buffer[bufferPos++] = ((uint16_t)topicLength & 0xFF);
+
+    int written = vsnprintf((char*)(this->buffer + bufferPos), this->bufferSize - bufferPos, fmt, args);
+    va_end(args);
+
+    if (written < 0 || written != topicLength) {
+        return false;  // Format string mismatch or error
+    }
+    bufferPos += topicLength;
+
+    this->buffer[bufferPos++] = qos;
+    return write(MQTTSUBSCRIBE | MQTTQOS1, this->buffer, bufferPos - MQTT_MAX_HEADER_SIZE);
+
 }
 
 BOOLEAN_TYPE PubSubClient::unsubscribe(const char* topic) {

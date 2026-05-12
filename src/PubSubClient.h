@@ -79,6 +79,8 @@
 
 // Maximum size of fixed header and variable length size header
 #define MQTT_MAX_HEADER_SIZE 5
+#define MQTT_TOPIC_LENGTH_SIZE 2
+#define MQTT_TOPIC_START_OFFSET (MQTT_MAX_HEADER_SIZE + MQTT_TOPIC_LENGTH_SIZE)
 #if !(defined(_WIN32) || defined(__linux__) || defined(__APPLE__))
 #define BOOLEAN_TYPE boolean
 #else
@@ -89,7 +91,8 @@ enum class PubSubClientResult {
     Success,
     // header read errors
     HeaderReadError_FirstByte,
-    HeaderReadError_FirstByteTypeInvalid,
+    HeaderReadError_FirstByteTypeIs0,
+    HeaderReadError_FirstByteTypeIs15,
     HeaderReadError_FirstByteQoSInvalid,
     HeaderReadError_VariableLength,
     HeaderReadError_VariableLengthCorruption,
@@ -179,6 +182,8 @@ private:
    //Stream* stream;
    int _state;
 
+   bool chunkedPublishSuccess;
+
    uint8_t rx_control_byte;
    inline uint8_t rx_type()   { return rx_control_byte & 0xF0; }
    inline uint8_t rx_flags()  { return rx_control_byte & 0x0F; }
@@ -247,8 +252,8 @@ public:
 
    BOOLEAN_TYPE beginPublish_fmt(unsigned int plength, BOOLEAN_TYPE retained, const char* fmt, ...);
    // Finish off this publish message (started with beginPublish)
-   // Returns 1 if the packet was sent successfully, 0 if there was an error
-   int endPublish();
+   // Returns true if the packet was sent successfully, false if there was an error
+   BOOLEAN_TYPE endPublish();
    // Write a single byte of payload (only to be used with beginPublish/endPublish)
    virtual size_t write(uint8_t);
    // Write size bytes from buffer into the payload (only to be used with beginPublish/endPublish)
@@ -264,6 +269,38 @@ public:
 
    const char* lastTxTopic();
    uint16_t lastTxTopicLength();
+
+   BOOLEAN_TYPE RxPublishTask(unsigned long t);
+
+    inline uint8_t* getTopicStart() {
+        return (this->buffer + MQTT_TOPIC_START_OFFSET);
+    }
+    inline uint8_t* getPayloadStart(uint16_t topicLength) { 
+        return this->buffer + MQTT_TOPIC_START_OFFSET + topicLength; 
+    }
+    inline uint32_t getRemainingBufferSize(uint16_t topicLength) {
+        return this->bufferSize - MQTT_TOPIC_START_OFFSET - topicLength;
+    }
+    inline void setTopicLength(uint16_t length) {
+        this->buffer[MQTT_MAX_HEADER_SIZE] = (length >> 8);
+        this->buffer[MQTT_MAX_HEADER_SIZE + 1] = (length & 0xFF);
+    }
+    
+    inline uint16_t getTopicLength() {
+        return ((uint16_t)this->buffer[MQTT_MAX_HEADER_SIZE] << 8) |
+               ((uint16_t)this->buffer[MQTT_MAX_HEADER_SIZE + 1]);
+    }
+
+    inline void send_MQTTPUBACK(uint8_t id_msb, uint8_t id_lsb, unsigned long t) {
+        this->buffer[0] = MQTTPUBACK;
+        this->buffer[1] = 2;
+        this->buffer[2] = id_msb;
+        this->buffer[3] = id_lsb;
+        _client->write(this->buffer, 4);
+        lastOutActivity = t;
+    }
+
+    void dumpBuffer(const char* label, uint32_t startoffset, uint32_t byteCount);
 
 };
 

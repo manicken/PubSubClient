@@ -1,11 +1,13 @@
 #include "PubSubClient_ErrorStrings.h"
 #include "PubSubClient.h"
+#include <WString.h>
 
 const __FlashStringHelper* PubSubClientErrorToString(PubSubClientResult r) {
     switch (r) {
         case PubSubClientResult::HeaderReadError_FirstByte: return F("HeaderReadError_FirstByte");
         case PubSubClientResult::HeaderReadError_FirstByteQoSInvalid: return F("HeaderReadError_FirstByteQoSInvalid");
-        case PubSubClientResult::HeaderReadError_FirstByteTypeInvalid: return F("HeaderReadError_FirstByteTypeInvalid");
+        case PubSubClientResult::HeaderReadError_FirstByteTypeIs0: return F("HeaderReadError_FirstByteTypeIs0");
+        case PubSubClientResult::HeaderReadError_FirstByteTypeIs15: return F("HeaderReadError_FirstByteTypeIs15");
         case PubSubClientResult::HeaderReadError_VariableLength: return F("HeaderReadError_VariableLength");
         case PubSubClientResult::HeaderReadError_VariableLengthCorruption: return F("HeaderReadError_VariableLengthCorruption");
         case PubSubClientResult::PayloadReadError: return F("PayloadReadError");

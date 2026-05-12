@@ -318,8 +318,15 @@ BOOLEAN_TYPE PubSubClient::readByte(uint8_t * result) {
        return false;
      }
    }
-   *result = _client->read();
-   return true;
+
+   int rc = _client->read();
+
+    if (rc < 0) {
+        return false;
+    }
+
+    *result = (uint8_t)rc;
+    return true;
 }
 
 // reads a byte into result[*index] and increments index
@@ -394,9 +401,13 @@ PubSubClientResult PubSubClient::readHeader() {
     }
     this->rx_control_byte = control_byte;
     uint8_t type = control_byte >> 4;
-    if (type == 0 || type == 15) {
-        return PubSubClientResult::HeaderReadError_FirstByteTypeInvalid;
+    if (type == 0) {
+        //Serial.printf("\r\nControl byte: 0x%02X\r\n", control_byte);
+        return PubSubClientResult::HeaderReadError_FirstByteTypeIs0;
+    } else if (type == 15) {
+        return PubSubClientResult::HeaderReadError_FirstByteTypeIs15;
     }
+    
     if ((control_byte & MQTT_QOS_MASK) == MQTTQOS_ERROR) {
         return PubSubClientResult::HeaderReadError_FirstByteQoSInvalid;
     }
@@ -445,6 +456,116 @@ PubSubClientResult PubSubClient::flushBytes(uint32_t count) {
     return PubSubClientResult::Success;
 }
 
+BOOLEAN_TYPE PubSubClient::RxPublishTask(unsigned long t) {
+    uint8_t id_msb, id_lsb;
+    PubSubClientResult res = PubSubClientResult::Success;
+
+    if (onPublishHeaderCallback == NULL) {
+        res = flushBytes(rx_length);
+        IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR_RETURN(res);
+        return true;
+    }
+    uint16_t topicLengthOut = 0;
+    res = readPublishHeader(topicLengthOut);
+    IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR_RETURN(res);
+
+    if (topicLengthOut > this->bufferSize) {
+        res = flushBytes(topicLengthOut);
+        IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR(res);
+
+        if (onErrorCallback) {
+            onErrorCallback(this->callbackContexts, PubSubClientResult::PreBufferOverflowError_Topic, PubSubClientErrorType::LogicError); // also send this
+        }
+        return false;
+    }
+    res = readBytes(getTopicStart(), topicLengthOut);
+    IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR_RETURN(res);
+
+    if ((uint32_t)(topicLengthOut + 2) > rx_length) {
+        disconnect();
+        if (onErrorCallback) {
+            onErrorCallback(this->callbackContexts, PubSubClientResult::ProtocolError_LengthMismatch, PubSubClientErrorType::FramingError);
+        }
+        return false;
+    }
+    uint32_t payloadLength = (rx_length - 2 - topicLengthOut); // -2 because of topic length bytes
+    if (rx_flags_qos() > 0) {
+        
+        if (!readByte(&id_msb) || !readByte(&id_lsb)) {
+            disconnect();
+            if (onErrorCallback) onErrorCallback(this->callbackContexts, PubSubClientResult::PublishHeaderReadError_PacketId, PubSubClientErrorType::FramingError);
+            return false;
+        }
+        payloadLength -= 2;
+    }
+
+    PSC_PublishFlags flags(rx_flags());
+    // here the topic is first in the buffer
+    //this->buffer[topicLengthOut] = '\0'; // null terminate the topic
+    PubSubClientPacketReceiver context = onPublishHeaderCallback(
+        this->callbackContexts, 
+        (char*)getTopicStart(),
+        topicLengthOut, 
+        payloadLength, 
+        flags
+    );
+    
+    if (context.sink != PubSubClientPayloadSink::Discard) {
+        uint32_t currentBuffCapacity = 0;
+        uint8_t* payloadDestination = NULL;
+
+        if (context.buffer != NULL && context.capacity != 0) {
+            currentBuffCapacity = context.capacity;
+            payloadDestination = context.buffer;
+        } else {
+            currentBuffCapacity = getRemainingBufferSize(topicLengthOut);
+            payloadDestination = getPayloadStart(topicLengthOut);
+        }
+
+        if (payloadLength > currentBuffCapacity) {
+            res = flushBytes(payloadLength);
+            IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR(res);
+
+            if (onErrorCallback) {
+                onErrorCallback(this->callbackContexts, PubSubClientResult::PreBufferOverflowError_Payload, PubSubClientErrorType::LogicError); 
+            }
+            return false;
+        }
+        res = readBytes(payloadDestination, payloadLength);
+        IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR_RETURN(res);
+
+        if (rx_flags_qos() == 1) {
+            send_MQTTPUBACK(id_msb, id_lsb, t);
+        }
+        if (context.onPublishCompleteCallback) {
+            context.onPublishCompleteCallback(this->callbackContexts, 
+                (char*)getTopicStart(), topicLengthOut, 
+                payloadDestination, payloadLength// currBuff allways point to where the payload starts, if it's external/internal dont matter
+            );
+        }
+        return true;
+    } else {
+        res = flushBytes(payloadLength);
+        IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR_RETURN(res);
+
+        if (rx_flags_qos() == 1) {
+            send_MQTTPUBACK(id_msb, id_lsb, t);
+        }
+        if (context.onPublishCompleteCallback) {
+            context.onPublishCompleteCallback(this->callbackContexts, 
+                (char*)getTopicStart(), topicLengthOut, 
+                NULL, 0);
+        }
+        return true;
+    }
+}
+
+//    ██       ██████   ██████  ██████  
+//    ██      ██    ██ ██    ██ ██   ██ 
+//    ██      ██    ██ ██    ██ ██████  
+//    ██      ██    ██ ██    ██ ██      
+//    ███████  ██████   ██████  ██   
+
 BOOLEAN_TYPE PubSubClient::loop() {
     if (connected() == false) { return false; }
 
@@ -464,116 +585,26 @@ BOOLEAN_TYPE PubSubClient::loop() {
         }
     }
     if (_client->available() == 0) { return true; }
-
+    lastInActivity = t;
     PubSubClientResult res = readHeader();
     IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR_RETURN(res);
 
     lastInActivity = t;
     uint8_t type = rx_type();
     if (type == MQTTPUBLISH) {
-        uint8_t id_msb, id_lsb;
-
-        if (onPublishHeaderCallback == NULL) {
-            res = flushBytes(rx_length);
-            IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR_RETURN(res);
-            return true;
-        }
-        uint16_t topicLengthOut = 0;
-        res = readPublishHeader(topicLengthOut);
-        IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR_RETURN(res);
-
-        if (topicLengthOut > this->bufferSize) {
-            res = flushBytes(topicLengthOut);
-            IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR(res);
-
-            if (onErrorCallback) {
-                onErrorCallback(this->callbackContexts, PubSubClientResult::PreBufferOverflowError_Topic, PubSubClientErrorType::LogicError); // also send this
-            }
-            return false;
-        }
-        res = readBytes(this->buffer, topicLengthOut);
-        IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR_RETURN(res);
-
-        if ((uint32_t)(topicLengthOut + 2) > rx_length) {
-            disconnect();
-            if (onErrorCallback) {
-                onErrorCallback(this->callbackContexts, PubSubClientResult::ProtocolError_LengthMismatch, PubSubClientErrorType::FramingError);
-            }
-            return false;
-        }
-        uint32_t payloadLength = (rx_length - 2 - topicLengthOut); // -2 because of topic length bytes
-        if (rx_flags_qos() > 0) {
-            
-            if (!readByte(&id_msb) || !readByte(&id_lsb)) {
-                disconnect();
-                if (onErrorCallback) onErrorCallback(this->callbackContexts, PubSubClientResult::PublishHeaderReadError_PacketId, PubSubClientErrorType::FramingError);
-                return false;
-            }
-            payloadLength -= 2;
-        }
-
-        PSC_PublishFlags flags(rx_flags());
-        // here the topic is first in the buffer
-        this->buffer[topicLengthOut] = '\0'; // null terminate the topic
-        PubSubClientPacketReceiver context = onPublishHeaderCallback(this->callbackContexts, (char*)this->buffer, topicLengthOut, payloadLength, flags);
-        
-        if (context.sink != PubSubClientPayloadSink::Discard) {
-            uint32_t currentBuffCapacity = 0;
-            uint8_t* currBuff = NULL;
-            if (context.buffer != NULL && context.capacity != 0) {
-                currentBuffCapacity = context.capacity;
-                currBuff = context.buffer;
-            } else {
-                currentBuffCapacity = this->bufferSize - topicLengthOut - 1; // represent remaining space in buffert -1 is because we added null char to topic
-                currBuff = this->buffer + topicLengthOut + 1; // represent from where in buffet to write next +1 is because we added null char to topic
-            }
-
-            if (payloadLength > currentBuffCapacity) {
-                res = flushBytes(payloadLength);
-                IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR(res);
-
-                if (onErrorCallback) {
-                    onErrorCallback(this->callbackContexts, PubSubClientResult::PreBufferOverflowError_Payload, PubSubClientErrorType::LogicError); 
-                }
-                return false;
-            }
-            res = readBytes(currBuff, payloadLength);
-            IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR_RETURN(res);
-
-            if (rx_flags_qos() == 1) {
-                this->buffer[0] = MQTTPUBACK;
-                this->buffer[1] = 2;
-                this->buffer[2] = id_msb;
-                this->buffer[3] = id_lsb;
-                _client->write(this->buffer, 4);
-                lastOutActivity = t;
-            }
-            if (context.onPublishCompleteCallback) {
-                context.onPublishCompleteCallback(this->callbackContexts, (char*)this->buffer, topicLengthOut, currBuff, payloadLength);
-            }
-            return true;
-        } else {
-            res = flushBytes(payloadLength);
-            IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR_RETURN(res);
-
-            if (rx_flags_qos() == 1) {
-                this->buffer[0] = MQTTPUBACK;
-                this->buffer[1] = 2;
-                this->buffer[2] = id_msb;
-                this->buffer[3] = id_lsb;
-                _client->write(this->buffer, 4);
-            }
-            if (context.onPublishCompleteCallback) {
-                context.onPublishCompleteCallback(this->callbackContexts, (char*)this->buffer, topicLengthOut, NULL, 0);
-            }
-            return true;
-        }
+        return RxPublishTask(t);
     } else if (type == MQTTPINGREQ) {
         this->buffer[0] = MQTTPINGRESP;
         this->buffer[1] = 0;
         _client->write(this->buffer,2);
     } else if (type == MQTTPINGRESP) {
         pingOutstanding = false;
+    } else {
+        // every MQTT packet must fully consume rx_length bytes,
+        // otherwise the TCP stream will lose MQTT frame alignment
+        // MQTTPINGREQ and MQTTPINGRESP dont have any payload so they dont need flush
+        res = flushBytes(rx_length);
+        IF_NOT_SUCCESS_DISCONNECT_TRYSENDERROR_RETURN(res);
     }
     return true;
 }
@@ -669,6 +700,7 @@ BOOLEAN_TYPE PubSubClient::publish_P(const char* topic, const uint8_t* payload, 
 }
 
 BOOLEAN_TYPE PubSubClient::beginPublish(const char* topic, unsigned int plength, BOOLEAN_TYPE retained) {
+    chunkedPublishSuccess = false;
     if (connected() == false) { return false; }
 
     // write the header and variable length field bytes
@@ -681,10 +713,12 @@ BOOLEAN_TYPE PubSubClient::beginPublish(const char* topic, unsigned int plength,
     size_t hlen = buildHeader(header, this->buffer, plength+length-MQTT_MAX_HEADER_SIZE);
     uint16_t rc = _client->write(this->buffer+(MQTT_MAX_HEADER_SIZE-hlen),length-(MQTT_MAX_HEADER_SIZE-hlen));
     lastOutActivity = millis();
-    return (rc == (length-(MQTT_MAX_HEADER_SIZE-hlen)));
+    chunkedPublishSuccess = (rc == (length-(MQTT_MAX_HEADER_SIZE-hlen)));
+    return chunkedPublishSuccess;
 }
 
 BOOLEAN_TYPE PubSubClient::beginPublish_fmt(unsigned int plength, BOOLEAN_TYPE retained, const char* fmt, ...) {
+    setTopicLength(0);
     if (connected() == false) { return false; }
 
     // Send the header and variable length field
@@ -709,7 +743,8 @@ BOOLEAN_TYPE PubSubClient::beginPublish_fmt(unsigned int plength, BOOLEAN_TYPE r
     size_t hlen = buildHeader(header, this->buffer, plength+bufferPos-MQTT_MAX_HEADER_SIZE);
     uint16_t rc = _client->write(this->buffer+(MQTT_MAX_HEADER_SIZE-hlen),bufferPos-(MQTT_MAX_HEADER_SIZE-hlen));
     lastOutActivity = millis();
-    return (rc == (bufferPos-(MQTT_MAX_HEADER_SIZE-hlen)));
+    chunkedPublishSuccess = (rc == (bufferPos-(MQTT_MAX_HEADER_SIZE-hlen)));
+    return chunkedPublishSuccess;
 }
 
 const char* PubSubClient::lastTxTopic() {
@@ -720,18 +755,22 @@ uint16_t PubSubClient::lastTxTopicLength() {
     ((uint16_t)this->buffer[MQTT_MAX_HEADER_SIZE + 1]);
 }
 
-int PubSubClient::endPublish() {
- return 1;
+BOOLEAN_TYPE PubSubClient::endPublish() {
+ return chunkedPublishSuccess;
 }
 
 size_t PubSubClient::write(uint8_t data) {
     lastOutActivity = millis();
-    return _client->write(data);
+    size_t written = _client->write(data);
+    if (written < 1) { chunkedPublishSuccess = false; }
+    return written;
 }
 
 size_t PubSubClient::write(const uint8_t *buffer, size_t size) {
     lastOutActivity = millis();
-    return _client->write(buffer,size);
+    size_t written = _client->write(buffer,size);
+    if (written != size) { chunkedPublishSuccess = false; }
+    return written;
 }
 /*
 size_t PubSubClient::buildHeader(uint8_t header, uint8_t* buf, uint16_t length) {
@@ -775,9 +814,7 @@ size_t PubSubClient::buildHeader(uint8_t header, uint8_t* buf, uint16_t length) 
         llen++;
     } while(len>0);
 
-    buf[0] = header;
-
-    buf[4-llen] = header;
+    buf[MQTT_MAX_HEADER_SIZE - 1 - llen] = header;
     
     return llen+1; // Full header size is variable length bit plus the 1-byte fixed header
 }
@@ -800,6 +837,7 @@ BOOLEAN_TYPE PubSubClient::write(uint8_t header, uint8_t* buf, uint16_t length) 
     }
     return result;
 #else
+    
     rc = _client->write(buf+(MQTT_MAX_HEADER_SIZE-hlen),length+hlen);
     lastOutActivity = millis();
     return (rc == hlen+length);
@@ -836,6 +874,16 @@ BOOLEAN_TYPE PubSubClient::subscribe(const char* topic, uint8_t qos) {
         return write(MQTTSUBSCRIBE|MQTTQOS1,this->buffer,length-MQTT_MAX_HEADER_SIZE);
     }
     return false;
+}
+
+void PubSubClient::dumpBuffer(const char* label, uint32_t startoffset, uint32_t byteCount) {
+    Serial.print(label);
+    Serial.print(": ");
+    for(int i = startoffset; i < (startoffset+byteCount) && i < this->bufferSize; i++) {
+        Serial.printf("%02X", this->buffer[i]);
+        Serial.print(" ");
+    }
+    Serial.println();
 }
 
 BOOLEAN_TYPE PubSubClient::subscribe_fmt(const char* fmt, uint8_t qos, ...) {
@@ -879,6 +927,11 @@ BOOLEAN_TYPE PubSubClient::subscribe_fmt(const char* fmt, uint8_t qos, ...) {
     bufferPos += topicLength;
 
     this->buffer[bufferPos++] = qos;
+
+    //uint32_t remainingLength = bufferPos - MQTT_MAX_HEADER_SIZE;
+    //uint8_t hlen = buildHeader(MQTTSUBSCRIBE | MQTTQOS1, this->buffer, remainingLength);
+    //dumpBuffer("subscribe_fmt",(MQTT_MAX_HEADER_SIZE-hlen), remainingLength + hlen);
+    //return true;
     return write(MQTTSUBSCRIBE | MQTTQOS1, this->buffer, bufferPos - MQTT_MAX_HEADER_SIZE);
 
 }

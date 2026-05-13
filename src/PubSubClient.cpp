@@ -343,7 +343,7 @@ BOOLEAN_TYPE PubSubClient::readByte(uint8_t * result, uint16_t * index){
 uint32_t PubSubClient::readPacket(uint8_t* lengthLength) {
     uint16_t len = 0;
     if(!readByte(this->buffer, &len)) return 0;
-    bool isPublish = (this->buffer[0]&0xF0) == MQTTPUBLISH;
+    bool isPublish = (this->buffer[0]&0xF0) == MQTT_PUBLISH_FLAG_MASK;
     uint32_t multiplier = 1;
     uint32_t length = 0;
     uint8_t digit = 0;
@@ -591,7 +591,7 @@ BOOLEAN_TYPE PubSubClient::loop() {
 
     lastInActivity = t;
     uint8_t type = rx_type();
-    if (type == MQTTPUBLISH) {
+    if (type == MQTT_PUBLISH_FLAG_MASK) {
         return RxPublishTask(t);
     } else if (type == MQTTPINGREQ) {
         this->buffer[0] = MQTTPINGRESP;
@@ -638,7 +638,7 @@ BOOLEAN_TYPE PubSubClient::publish(const char* topic, const uint8_t* payload, un
         }
 
         // Write the header
-        uint8_t header = MQTTPUBLISH;
+        uint8_t header = MQTT_PUBLISH_FLAG_MASK;
         if (retained) {
             header |= 1;
         }
@@ -668,7 +668,7 @@ BOOLEAN_TYPE PubSubClient::publish_P(const char* topic, const uint8_t* payload, 
 
     tlen = strnlen(topic, this->bufferSize);
 
-    header = MQTTPUBLISH;
+    header = MQTT_PUBLISH_FLAG_MASK;
     if (retained) {
         header |= 1;
     }
@@ -706,7 +706,7 @@ BOOLEAN_TYPE PubSubClient::beginPublish(const char* topic, unsigned int plength,
     // write the header and variable length field bytes
     uint16_t length = MQTT_MAX_HEADER_SIZE;
     length = writeString(topic,this->buffer,length);
-    uint8_t header = MQTTPUBLISH;
+    uint8_t header = MQTT_PUBLISH_FLAG_MASK;
     if (retained) {
         header |= 1;
     }
@@ -718,32 +718,34 @@ BOOLEAN_TYPE PubSubClient::beginPublish(const char* topic, unsigned int plength,
 }
 
 BOOLEAN_TYPE PubSubClient::beginPublish_fmt(unsigned int plength, BOOLEAN_TYPE retained, const char* fmt, ...) {
+    chunkedPublishSuccess = false;
     setTopicLength(0);
     if (connected() == false) { return false; }
 
     // Send the header and variable length field
-    uint16_t bufferPos = MQTT_MAX_HEADER_SIZE;
+    
     va_list args;
     va_start(args, fmt);
-    int topicLength = vsnprintf((char*)(this->buffer + bufferPos + 2), this->bufferSize - bufferPos - 2, fmt, args);
+    int topicLength = vsnprintf((char*)(getTopicStart()), this->bufferSize - MQTT_MAX_HEADER_SIZE - MQTT_TOPIC_LENGTH_SIZE, fmt, args);
+    
     va_end(args);
     if (topicLength <= 0 ||
-        topicLength >= (this->bufferSize - bufferPos - 2)) {
+        topicLength >= (this->bufferSize - MQTT_MAX_HEADER_SIZE - MQTT_TOPIC_LENGTH_SIZE)) {
         return false;
     }
-    
-    this->buffer[bufferPos++] = ((uint16_t)topicLength >> 8);
-    this->buffer[bufferPos++] = ((uint16_t)topicLength & 0xFF);
-    bufferPos += topicLength;
+    setTopicLength(topicLength); // this is for non message ID situations
 
-    uint8_t header = MQTTPUBLISH;
+    uint8_t header = MQTT_PUBLISH_FLAG_MASK;
     if (retained) {
-        header |= 1;
+        header |= MQTT_RETAIN_FLAG_MASK;
     }
-    size_t hlen = buildHeader(header, this->buffer, plength+bufferPos-MQTT_MAX_HEADER_SIZE);
-    uint16_t rc = _client->write(this->buffer+(MQTT_MAX_HEADER_SIZE-hlen),bufferPos-(MQTT_MAX_HEADER_SIZE-hlen));
+    uint16_t topicHeaderLength = topicLength + MQTT_TOPIC_LENGTH_SIZE;
+    size_t hlen = buildHeader(header, this->buffer, plength+topicHeaderLength);
+
+    uint16_t rc = _client->write(this->buffer+(MQTT_MAX_HEADER_SIZE-hlen), topicHeaderLength+hlen);
+
     lastOutActivity = millis();
-    chunkedPublishSuccess = (rc == (bufferPos-(MQTT_MAX_HEADER_SIZE-hlen)));
+    chunkedPublishSuccess = (rc == (topicHeaderLength+hlen));
     return chunkedPublishSuccess;
 }
 
@@ -762,17 +764,47 @@ BOOLEAN_TYPE PubSubClient::endPublish() {
 size_t PubSubClient::write(uint8_t data) {
     lastOutActivity = millis();
     size_t written = _client->write(data);
-    if (written < 1) { chunkedPublishSuccess = false; }
+    if (written == 0) { // as size_t is unsigned 
+        chunkedPublishSuccess = false;
+        Serial.printf("\r\nPSC Error while write:%02X\r\n", data);
+    } else {
+        //Serial.printf("\r\nPSC write:%02X\r\n", data);
+    }
     return written;
 }
 
 size_t PubSubClient::write(const uint8_t *buffer, size_t size) {
     lastOutActivity = millis();
+    if (size == 0) { 
+        Serial.println("PSC write buffer skipping empty size");
+        return 0;
+     }
+
     size_t written = _client->write(buffer,size);
-    if (written != size) { chunkedPublishSuccess = false; }
+    if (written == 0) { // as size_t is unsigned 
+        chunkedPublishSuccess = false;
+        Serial.printf("\r\nPSC Error (written == 0) while write from buffer (%d):", size);
+        Serial.write(buffer, size);
+        if (!_client->connected()) {
+            Serial.print(" [reason: disconnected]");
+        }
+        Serial.println();
+    }
+    else if (written != size) {
+        chunkedPublishSuccess = false;
+        Serial.printf("\r\nPSC Error while write from buffer (%d):", size);
+        Serial.write(buffer, size);
+        Serial.println();
+    } else {
+        //Serial.printf("\r\nPSC write from buffer (%d):", size);
+        //Serial.write(buffer, size);
+        //Serial.println();
+    }
     return written;
 }
-/*
+// WARNING:
+// MQTT Remaining Length uses VLQ (base-128 variable-length encoding).
+// The encoded byte count is NOT known until encoding is complete.
 size_t PubSubClient::buildHeader(uint8_t header, uint8_t* buf, uint16_t length) {
     uint8_t lenBuf[4];
     uint8_t llen = 0;
@@ -794,28 +826,6 @@ size_t PubSubClient::buildHeader(uint8_t header, uint8_t* buf, uint16_t length) 
     for (int i=0;i<llen;i++) {
         buf[MQTT_MAX_HEADER_SIZE-llen+i] = lenBuf[i];
     }
-    return llen+1; // Full header size is variable length bit plus the 1-byte fixed header
-}*/
-
-size_t PubSubClient::buildHeader(uint8_t header, uint8_t* buf, uint16_t length) {
-    //uint8_t lenBuf[4];
-    uint8_t llen = 0;
-    uint8_t digit;
-    uint8_t pos = 0;
-    uint16_t len = length;
-    do {
-
-        digit = len  & 127; //digit = len %128
-        len >>= 7; //len = len / 128
-        if (len > 0) {
-            digit |= 0x80;
-        }
-        buf[MQTT_MAX_HEADER_SIZE - 1 - llen] = digit;
-        llen++;
-    } while(len>0);
-
-    buf[MQTT_MAX_HEADER_SIZE - 1 - llen] = header;
-    
     return llen+1; // Full header size is variable length bit plus the 1-byte fixed header
 }
 
@@ -876,15 +886,7 @@ BOOLEAN_TYPE PubSubClient::subscribe(const char* topic, uint8_t qos) {
     return false;
 }
 
-void PubSubClient::dumpBuffer(const char* label, uint32_t startoffset, uint32_t byteCount) {
-    Serial.print(label);
-    Serial.print(": ");
-    for(int i = startoffset; i < (startoffset+byteCount) && i < this->bufferSize; i++) {
-        Serial.printf("%02X", this->buffer[i]);
-        Serial.print(" ");
-    }
-    Serial.println();
-}
+
 
 BOOLEAN_TYPE PubSubClient::subscribe_fmt(const char* fmt, uint8_t qos, ...) {
     if (connected() == false) { return false; }
@@ -928,12 +930,7 @@ BOOLEAN_TYPE PubSubClient::subscribe_fmt(const char* fmt, uint8_t qos, ...) {
 
     this->buffer[bufferPos++] = qos;
 
-    //uint32_t remainingLength = bufferPos - MQTT_MAX_HEADER_SIZE;
-    //uint8_t hlen = buildHeader(MQTTSUBSCRIBE | MQTTQOS1, this->buffer, remainingLength);
-    //dumpBuffer("subscribe_fmt",(MQTT_MAX_HEADER_SIZE-hlen), remainingLength + hlen);
-    //return true;
     return write(MQTTSUBSCRIBE | MQTTQOS1, this->buffer, bufferPos - MQTT_MAX_HEADER_SIZE);
-
 }
 
 BOOLEAN_TYPE PubSubClient::unsubscribe(const char* topic) {
@@ -1087,4 +1084,22 @@ PubSubClient& PubSubClient::setKeepAlive(uint16_t keepAlive) {
 PubSubClient& PubSubClient::setSocketTimeout(uint16_t timeout) {
     this->socketTimeout = timeout;
     return *this;
+}
+
+void PubSubClient::dumpBuffer(const char* label, uint32_t startoffset, uint32_t byteCount) {
+    Serial.print(label);
+    Serial.print(": ");
+    for(int i = startoffset; i < (startoffset+byteCount) && i < this->bufferSize; i++) {
+        Serial.printf("%02X", this->buffer[i]);
+        Serial.print(" ");
+    }
+    Serial.println();
+}
+
+void PubSubClient::dump(const char* label, uint8_t* buf, int size) {
+    Serial.printf("\n%s: ", label);
+    for (int i = 0; i < size; i++) {
+        Serial.printf("%02X ", buf[i]);
+    }
+    Serial.println();
 }

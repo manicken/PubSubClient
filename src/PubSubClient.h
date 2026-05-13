@@ -55,7 +55,7 @@
 
 #define MQTTCONNECT     1 << 4  // Client request to connect to Server
 #define MQTTCONNACK     2 << 4  // Connect Acknowledgment
-#define MQTTPUBLISH     3 << 4  // Publish message
+#define MQTT_PUBLISH_FLAG_MASK     3 << 4  // Publish message
 #define MQTTPUBACK      4 << 4  // Publish Acknowledgment
 #define MQTTPUBREC      5 << 4  // Publish Received (assured delivery part 1)
 #define MQTTPUBREL      6 << 4  // Publish Release (assured delivery part 2)
@@ -69,13 +69,13 @@
 #define MQTTDISCONNECT  14 << 4 // Client is Disconnecting
 #define MQTTReserved    15 << 4 // Reserved
 
-#define RETAIN_FLAG     (1 << 0)
+#define MQTT_RETAIN_FLAG_MASK     (1 << 0)
 #define MQTT_QOS_MASK   (3 << 1)
 #define MQTTQOS0        (0 << 1)
 #define MQTTQOS1        (1 << 1)
 #define MQTTQOS2        (2 << 1)
 #define MQTTQOS_ERROR   (3 << 1)
-#define DUP_FLAG        (1 << 3)
+#define MQTT_DUP_FLAG_MASK        (1 << 3)
 
 // Maximum size of fixed header and variable length size header
 #define MQTT_MAX_HEADER_SIZE 5
@@ -115,9 +115,9 @@ struct PSC_PublishFlags {
 private:
     uint8_t  flags;      // retain/qos/dup
 public:
-	inline bool RETAIN() const {return (flags & 0x01); }
-	inline bool DUP() const { return (flags & 0x08); }
-	inline uint8_t QoS() const { return (flags >> 1) & 0x03; }
+	inline bool RETAIN() const {return (flags & MQTT_RETAIN_FLAG_MASK); }
+	inline bool DUP() const { return (flags & MQTT_DUP_FLAG_MASK); }
+	inline uint8_t QoS() const { return (flags >> 1) & MQTT_QOS_MASK; }
 	
 	PSC_PublishFlags(uint8_t  flags) : flags(flags) {}
 };
@@ -176,6 +176,7 @@ private:
    // Note: the header is built at the end of the first MQTT_MAX_HEADER_SIZE bytes, so will start
    //       (MQTT_MAX_HEADER_SIZE - <returned size>) bytes into the buffer
    size_t buildHeader(uint8_t header, uint8_t* buf, uint16_t length);
+
    IPAddress ip;
    const char* domain;
    uint16_t port;
@@ -301,6 +302,7 @@ public:
     }
 
     void dumpBuffer(const char* label, uint32_t startoffset, uint32_t byteCount);
+    void dump(const char* label, uint8_t* buf, int size);
 
 };
 
